@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template with Lambda Layer to update GCP Cloud Armor using AWS CloudFront IPs
+
+Parameters:
+  GCPServiceAccountSecretName:
+    Type: String
+    Default: GCPServiceAccountCredentials
+    Description: Name of the Secrets Manager secret storing GCP service account JSON
+
+  GCPArmorPolicyName:
+    Type: String
+    Default: your-security-policy-name
+    Description: Name of the Google Cloud Armor security policy to update
+
+  GCPArmorRulePriority:
+    Type: Number
+    Default: 1000
+    Description: Starting priority value for the Cloud Armor rules
+
+  LayerS3Bucket:
+    Type: String
+    Description: S3 bucket where the Lambda Layer ZIP is stored
+
+  LayerS3Key:
+    Type: String
+    Default: layers/google-api-layer.zip
+    Description: S3 key (path) to the Lambda Layer ZIP file
+
+  LambdaFunctionName:
+    Type: String
+    Default: GCPArmorUpdater
+    Description: Name of the Lambda function
+
+  LambdaRoleName:
+    Type: String
+    Default: LambdaGCPArmorUpdaterRole
+    Description: IAM role name for the Lambda function
+
+Resources:
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref LambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${GCPServiceAccountSecretName}*
+
+  GCPArmorDependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: google-api-layer
+      Description: Layer with google-auth and google-api-python-client
+      CompatibleRuntimes:
+        - python3.9
+      Content:
+        S3Bucket: !Ref LayerS3Bucket
+        S3Key: !Ref LayerS3Key
+
+  GCPArmorUpdaterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 300
+      Layers:
+        - !Ref GCPArmorDependenciesLayer
+      Code:
+        ZipFile: |
+          import json
+          import urllib.request
+          import boto3
+          import os
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from aggregate_prefixes import aggregate_prefixes
+
+          def chunk_ip_ranges(ip_ranges, chunk_size):
+              for i in range(0, len(ip_ranges), chunk_size):
+                  yield ip_ranges[i:i + chunk_size]
+
+          def handler(event, context):
+              print("Event Received:", json.dumps(event))
+              url = "https://ip-ranges.amazonaws.com/ip-ranges.json"
+              response = urllib.request.urlopen(url)
+              ip_data = json.loads(response.read())
+
+              raw_prefixes = [item['ip_prefix'] for item in ip_data['prefixes'] if item['service'] == 'CLOUDFRONT']
+              cloudfront_prefixes = sorted([str(p) for p in aggregate_prefixes(raw_prefixes)])
+
+              secret_name = os.environ['GCP_SERVICE_ACCOUNT_SECRET']
+              base_priority = int(os.environ['GCP_ARMOR_RULE_PRIORITY'])
+
+              session = boto3.session.Session()
+              region_name = session.region_name
+              client = session.client(
+                  service_name='secretsmanager',
+                  region_name=region_name
+              )
+              get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+              credentials_info = json.loads(get_secret_value_response['SecretString'])
+              credentials = service_account.Credentials.from_service_account_info(credentials_info)
+
+              project_id = credentials_info['project_id']
+              security_policy_name = os.environ['GCP_ARMOR_POLICY_NAME']
+
+              compute = build('compute', 'v1', credentials=credentials)
+              policy = compute.securityPolicies().get(project=project_id, securityPolicy=security_policy_name).execute()
+
+              new_rules = [rule for rule in policy.get('rules', []) if not rule.get('description', '').startswith('CloudFront IPs chunk')]
+
+              for index, ip_chunk in enumerate(chunk_ip_ranges(cloudfront_prefixes, 10)):
+                  new_rules.append({
+                      'priority': base_priority + index,
+                      'match': {
+                          'versionedExpr': 'SRC_IPS_V1',
+                          'config': {
+                              'srcIpRanges': list(ip_chunk)
+                          }
+                      },
+                      'action': 'allow',
+                      'description': f'CloudFront IPs chunk {index + 1}'
+                  })
+
+              policy['rules'] = new_rules
+              compute.securityPolicies().patch(project=project_id, securityPolicy=security_policy_name, body=policy).execute()
+              print("Updated Cloud Armor with CloudFront IPs")
+      Environment:
+        Variables:
+          GCP_SERVICE_ACCOUNT_SECRET: !Ref GCPServiceAccountSecretName
+          GCP_ARMOR_POLICY_NAME: !Ref GCPArmorPolicyName
+          GCP_ARMOR_RULE_PRIORITY: !Ref GCPArmorRulePriority
+
+  PermissionForSNSInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GCPArmorUpdaterLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: arn:aws:sns:us-east-1:806199016981:AmazonIpSpaceChanged
+
+  SNSLambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: arn:aws:sns:us-east-1:806199016981:AmazonIpSpaceChanged
+      Protocol: lambda
+      Endpoint: !GetAtt GCPArmorUpdaterLambda.Arn

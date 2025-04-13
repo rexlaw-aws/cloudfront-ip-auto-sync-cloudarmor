@@ -2,6 +2,29 @@
 
 This project provides an AWS Lambda function designed to automatically update Google Cloud Armor security policies with the latest CloudFront IP ranges. It ensures that your GCP infrastructure remains protected by dynamically adjusting to IP changes.
 
+## Background
+
+### AWS ip-ranges.json Overview
+
+AWS publishes its current IP address ranges in a JSON format, available at [https://ip-ranges.amazonaws.com/ip-ranges.json](https://ip-ranges.amazonaws.com/ip-ranges.json). This file includes IP ranges used by specific AWS services and regions.
+
+Each entry in the file includes:
+
+- `ip_prefix`: The CIDR range
+- `region`: The associated AWS region
+- `service`: The AWS service using the IP (e.g., `CLOUDFRONT_ORIGIN_FACING`, `EC2`)
+- `network_border_group`: Scope of IP advertisement
+
+This solution filters for `CLOUDFRONT_ORIGIN_FACING` entries and uses only those CIDRs, giving you granular control over exactly what AWS traffic is allowed through GCP Cloud Armor.
+
+For more information, refer to the [AWS IP address ranges documentation](https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html).
+
+### GCP Armor Limitations
+
+Google Cloud Armor provides named IP address lists like `iplist-public-clouds-aws` which represent the entire public IP space used by AWS. While convenient, this approach lacks granularity. If your goal is to allow only CloudFront traffic, using the AWS named list would also include traffic from services like EC2, Lambda, or RDS, potentially increasing your attack surface.
+
+This solution helps solve that by dynamically fetching and applying only the CloudFront IP ranges to your Cloud Armor policy, ensuring tighter and more specific access control.
+
 ## Features
 
 - **Automated Updates**: Fetches the latest CloudFront IP ranges and updates GCP Cloud Armor policies accordingly.

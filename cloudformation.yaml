@@ -71,7 +71,7 @@ Resources:
       LayerName: google-api-layer
       Description: Layer with google-auth and google-api-python-client
       CompatibleRuntimes:
-        - python3.9
+        - python3.13
       Content:
         S3Bucket: !Ref LayerS3Bucket
         S3Key: !Ref LayerS3Key
@@ -82,7 +82,7 @@ Resources:
       FunctionName: !Ref LambdaFunctionName
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.9
+      Runtime: python3.13
       Timeout: 300
       Layers:
         - !Ref GCPArmorDependenciesLayer

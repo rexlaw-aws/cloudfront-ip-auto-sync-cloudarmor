@@ -2,6 +2,29 @@
 
 此專案提供一個 AWS Lambda 函數，設計用於自動以最新的 CloudFront IP 範圍更新 Google Cloud Armor 安全政策。它確保您的 GCP 基礎設施能夠透過動態調整 IP 變更來保持受保護狀態。
 
+## 背景
+
+### AWS ip-ranges.json 概覽
+
+AWS 以 JSON 格式發佈其當前 IP 地址範圍，可在 [https://ip-ranges.amazonaws.com/ip-ranges.json](https://ip-ranges.amazonaws.com/ip-ranges.json) 獲取。此文件包含特定 AWS 服務和地區使用的 IP 範圍。
+
+文件中的每個條目包括：
+
+- `ip_prefix`：CIDR 範圍
+- `region`：相關的 AWS 地區
+- `service`：使用該 IP 的 AWS 服務（例如 `CLOUDFRONT_ORIGIN_FACING`、`EC2`）
+- `network_border_group`：IP 廣告的範圍
+
+此解決方案過濾 `CLOUDFRONT_ORIGIN_FACING` 條目並僅使用這些 CIDR，讓你能精細控制允許通過 GCP Cloud Armor 的 AWS 流量。
+
+更多資訊，請參閱 [AWS IP 地址範圍文檔](https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html)。
+
+### GCP Armor 限制
+
+Google Cloud Armor 提供命名 IP 地址列表，如 `iplist-public-clouds-aws`，代表 AWS 使用的整個公共 IP 空間。雖然方便，但這種方法缺乏精細度。如果你的目標是只允許 CloudFront 流量，使用 AWS 命名列表也會包括來自 EC2、Lambda 或 RDS 等服務的流量，可能增加你的攻擊面。
+
+此解決方案通過動態獲取並僅應用 CloudFront IP 範圍到你的 Cloud Armor 策略來解決這個問題，確保更嚴格和更具體的訪問控制。
+
 ## 功能特點
 
 - **自動更新**：獲取最新的 CloudFront IP 範圍並相應地更新 GCP Cloud Armor 政策。

@@ -10,6 +10,30 @@ This project provides an AWS Lambda function designed to automatically update Go
 - **Secure Credential Handling**: Utilizes AWS Secrets Manager to securely store and access GCP service account credentials.
 - **Event-Driven Execution**: Triggered by AWS SNS notifications when CloudFront IP ranges change. [AWS Docs - AWS IP address ranges notifications](https://docs.aws.amazon.com/vpc/latest/userguide/subscribe-notifications.html)
 
+## Architecture
+
+_This section will include a diagram to illustrate the architecture of this solution._
+
+![Architecture Diagram](architecture-diagram.png)
+
+## How It Works
+
+This solution is designed to coexist with existing Cloud Armor rules. It exclusively manages rules related to AWS CloudFront IP ranges, leaving all other rules untouched.
+
+The Lambda function identifies which rules it created by looking for a specific prefix in the `description` field (e.g., `(Managed by AWS Lambda) CloudFront IPs chunk`). This allows the system to safely remove only those entries and replace them with the most current version.
+
+
+This solution does not rely on DynamoDB or S3 for state tracking. Instead, the Lambda function:
+
+1. Fetches the current list of CloudFront IP ranges from AWS’s [ip-ranges.json](https://ip-ranges.amazonaws.com/ip-ranges.json).
+2. Aggregates and groups the IPs into chunks of up to 10 CIDRs per Cloud Armor rule.
+3. Retrieves the existing Cloud Armor policy using the GCP API.
+4. Removes all rules previously created by the Lambda (identified by a specific description prefix).
+5. Creates a fresh set of rules using the aggregated CloudFront CIDRs.
+6. Submits all changes at once using the `patch` API call to Google Cloud Armor, ensuring immediate application.
+
+This design allows fully stateless operation, triggered by event or manually, and always produces a complete up-to-date policy without intermediate storage.
+
 ## Prerequisites
 
 ### AWS
@@ -79,7 +103,7 @@ This project provides an AWS Lambda function designed to automatically update Go
 
    Replace `YourSecretName` with the name specified in your deployment parameters and `path/to/your-gcp-credentials.json` with the path to your downloaded GCP JSON credentials.
 
-6. **Test the Lambda Function and initial the rules**:
+6. **Test the Lambda Function and initial setup the rules in Cloud Armor**:
    ```bash
    aws lambda invoke \
      --function-name GCPArmorUpdater \
@@ -104,3 +128,4 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 ## License
 
 This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
+

@@ -106,7 +106,7 @@ Resources:
               response = urllib.request.urlopen(url)
               ip_data = json.loads(response.read())
 
-              raw_prefixes = [item['ip_prefix'] for item in ip_data['prefixes'] if item['service'] == 'CLOUDFRONT']
+              raw_prefixes = [item['ip_prefix'] for item in ip_data['prefixes'] if item['service'] == 'CLOUDFRONT_ORIGIN_FACING']
               cloudfront_prefixes = sorted([str(p) for p in aggregate_prefixes(raw_prefixes)])
 
               secret_name = os.environ['GCP_SERVICE_ACCOUNT_SECRET']
@@ -128,7 +128,7 @@ Resources:
               compute = build('compute', 'v1', credentials=credentials)
               policy = compute.securityPolicies().get(project=project_id, securityPolicy=security_policy_name).execute()
 
-              new_rules = [rule for rule in policy.get('rules', []) if not rule.get('description', '').startswith('CloudFront IPs chunk')]
+              new_rules = [rule for rule in policy.get('rules', []) if not rule.get('description', '').startswith('(Managed by AWS Lambda) CloudFront IPs chunk')]
 
               for index, ip_chunk in enumerate(chunk_ip_ranges(cloudfront_prefixes, 10)):
                   new_rules.append({
@@ -140,7 +140,7 @@ Resources:
                           }
                       },
                       'action': 'allow',
-                      'description': f'CloudFront IPs chunk {index + 1}'
+                      'description': f'(Managed by AWS Lambda) CloudFront IPs chunk {index + 1}'
                   })
 
               policy['rules'] = new_rules
